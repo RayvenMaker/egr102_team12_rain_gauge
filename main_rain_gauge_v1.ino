@@ -26,6 +26,7 @@ const byte buttons[] = {l_button, c_button, r_button};
 
 const float bucketSize = 0.01;    // Size of each bucket drop in inches of rain
 const unsigned long hourLength = 5000; // Length of an "hour" in milliseconds
+const unsigned long rainfallCheckInterval = 100; // Time between rainfall checks
 
 byte screen = 0;
 byte motorDuty = 0;
@@ -72,6 +73,7 @@ void loop() {
   unsigned long currentMillis = millis();
   static unsigned long previousMotorM = 0;
   static unsigned long previousHour = 0;
+  static unsigned long previousRainCheck = 0;
   static unsigned int currentHour = 0;
 
   // Check if an hour has passed
@@ -80,14 +82,16 @@ void loop() {
     currentHour++;
   }
 
-  // Read rain gauge
-  float rainfallRate = readRainfall();
+  // Read rain gauge every checking interval
+  if(currentMillis - previousRainCheck >= rainfallCheckInterval){
+    float rainfallRate = readRainfall();
+  }
+
   // check if any buttons were pressed
   byte* currentPressed = checkButtons();
 
   // Set up the LCD change tracker
   static byte lcdRefresh = 1;
-  static byte lcdClear = 0;
 
   // Display management block
   switch(screen) {
@@ -122,7 +126,7 @@ void loop() {
 
 
   // Calculate irrigation levels
-  moveDuration = 60000 * (100 / calcIrrigation(, rainfall));
+  moveDuration = 60000 * (100 / calcIrrigation(rainfallRate));
   // Motor movement block
   if(currentMillis - previousMotorM >= moveDuration) {
 
@@ -131,6 +135,7 @@ void loop() {
 
 }
 
+// Manages the LCD display and the customizable functions
 byte* profileScreen(byte buttonStates[], byte lcdChanged, byte currentProfile) {
   static byte editing = 0;
   byte screen = 0;          // Current screen
@@ -140,6 +145,7 @@ byte* profileScreen(byte buttonStates[], byte lcdChanged, byte currentProfile) {
     lcd.setCursor(0, 0);
     lcd.print("current profile");
     lcd.setCursor(0, 1);
+    // This is broken now, it's not getting the length of the full word
     byte profileLen = sizeof(profiles[currentProfile])/sizeof(profiles[0]);
     lcd.print("<");
     lcd.setCursor(((16 - profileLen)/2 + 1), 1);
@@ -149,7 +155,7 @@ byte* profileScreen(byte buttonStates[], byte lcdChanged, byte currentProfile) {
     lcdChanged = 0;
   }
 
-  if(buttonStates[4] == 1) { // Checks if a button state has been changed
+  if(buttonStates[3] == 1) { // Checks if a button state has been changed
     lcdChanged = 1;
     if(editing == 0) {
 
@@ -207,26 +213,31 @@ byte* profileScreen(byte buttonStates[], byte lcdChanged, byte currentProfile) {
   return outputValues;
 }
 
-// This function isn't quite working... look into how to pass arrays in properly
-// Or avoid passing in arrays entirely
+// Passes out array with current button states and whether they have recently changed
 byte* checkButtons() {
-  static byte previousButtonState[] = {0, 0, 0};
-  byte currentButtonState[] = {0, 0, 0, 0};    // L, C, R, (changed?)
+  static byte previousButtonState[] = {0, 0, 0}; // L, C, R
+  static byte currentButtonState[] = {0, 0, 0, 0};    // L, C, R, (changed?)
 
+  // Filling out the array with the current button states
   for(byte i = 0; i < 3; i++) {
     currentButtonState[i] = digitalRead(buttons[i]);
   }
 
+  // Checking to see if any have changed since the last call
   for(byte i = 0; i < 3; i++) {
     if(currentButtonState[i] != previousButtonState[i]) {
-      currentButtonState[4] = 1;
+      currentButtonState[3] = 1;
       break;
     } else {
-      currentButtonState[4] = 0;
+      currentButtonState[3] = 0;
     }
   }
 
-  previousButtonState[] =
+  // Recording the new state as previous
+  for(byte i = 0; i < 3; i++){
+    previousButtonState[i] = currentButtonState[i];
+  }
+
   return currentButtonState;
 }
 
@@ -241,21 +252,29 @@ float readRainfall() {
 
   byte currentState = digitalRead(hall);
 
+  // Calculate rate based on the time since last dump
+  if(currentMillis - previousDump < hourLength && previousDump != 0){
+    rainfallRate = bucketSize/(float(currentMillis - previousDump)/float(hourLength));
+  } else {
+    rainfallRate = 0;
+  }
+
+  // Takes the average of the last ten readings
+  float avgRainfallRate = rainfallAverage(rainfallRate);
+
+  // Checks if the bucket has dumped
+  // This is done after the rate calculator to make sure that there's no zeros
+  // in the denomonator.
   if(currentState != previousState) {
     previousDump = currentMillis;
   }
 
-  if(currentMillis - previousDump < hourLength && previousDump != 0){
-    rainfallRate = bucketSize/(previousDump/hourLength);
-  } else {
-    rainfallRate = 0;
-  }
   previousState = currentState;
-  return rainfallRate;
+  return avgRainfallRate;
 }
 
 byte rainfallScreen() {
-
+  return 0;
 }
 
 byte* motorScreen() {
@@ -268,6 +287,24 @@ void runMotor(byte motorDuty) {
 
 }
 
-byte calcIrrigation(float target, float rainfall) {
-  return motorDuty; // Motor duty is a number between
+byte calcIrrigation(float target, float rainfallRate) {
+  return motorDuty; // Motor duty is a number between 0 and 100
+}
+
+float rainfallAverage(float M) {
+  #define LM_SIZE 10
+  static float LM[LM_SIZE];      // LastMeasurements
+  static byte index = 0;
+  static float sum = 0;
+  static byte count = 0;
+
+  // keep sum updated to improve speed.
+  sum -= LM[index];
+  LM[index] = M;
+  sum += LM[index];
+  index++;
+  index = index % LM_SIZE;
+  if (count < LM_SIZE) count++;
+
+  return sum / count;
 }

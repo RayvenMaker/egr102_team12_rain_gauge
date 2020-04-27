@@ -25,7 +25,7 @@ const char *screens[] = {"current profile", "rainfall (in/s)", "motor duty %", "
 const byte buttons[] = {l_button, c_button, r_button};
 
 const float bucketSize = 0.01;    // Size of each bucket drop in inches of rain
-const unsigned long hourLength = 5000 // Length of an "hour" in milliseconds
+const unsigned long hourLength = 5000; // Length of an "hour" in milliseconds
 
 byte screen = 0;
 byte motorDuty = 0;
@@ -68,21 +68,6 @@ void setup() {
 void loop() {
   // RUN THE CODES MANY TIMES
 
-  // Read rain gauge
-  static int rainfallRate = 0;
-  float* rainfallState[] = readRainfall(totalRainfall, previousBucketState);
-  rainfallRate = rainfallState[0];
-  previousBucketState = rainfallState[1];
-
-  // Stores the buttons that were pressed from last loop
-  static byte pressed[] = {0, 0, 0, 0};
-  // check if any buttons were pressed
-  byte* currentPressed = checkButtons(pressed);
-
-  // Set up the LCD change tracker
-  static byte lcdRefresh = 1;
-  static byte lcdClear = 0;
-
   // Get current time and set up timers
   unsigned long currentMillis = millis();
   static unsigned long previousMotorM = 0;
@@ -94,6 +79,15 @@ void loop() {
     previousHour = currentMillis;
     currentHour++;
   }
+
+  // Read rain gauge
+  float rainfallRate = readRainfall();
+  // check if any buttons were pressed
+  byte* currentPressed = checkButtons();
+
+  // Set up the LCD change tracker
+  static byte lcdRefresh = 1;
+  static byte lcdClear = 0;
 
   // Display management block
   switch(screen) {
@@ -146,7 +140,7 @@ byte* profileScreen(byte buttonStates[], byte lcdChanged, byte currentProfile) {
     lcd.setCursor(0, 0);
     lcd.print("current profile");
     lcd.setCursor(0, 1);
-    byte profileLen = sizeof(profiles[currentProfile]);
+    byte profileLen = sizeof(profiles[currentProfile])/sizeof(profiles[0]);
     lcd.print("<");
     lcd.setCursor(((16 - profileLen)/2 + 1), 1);
     lcd.print(profiles[currentProfile]);
@@ -213,8 +207,11 @@ byte* profileScreen(byte buttonStates[], byte lcdChanged, byte currentProfile) {
   return outputValues;
 }
 
-byte* checkButtons(byte previousButtonState[]) {
-  bool currentButtonState[i] = {0, 0, 0, 0};    // L, C, R, (changed?)
+// This function isn't quite working... look into how to pass arrays in properly
+// Or avoid passing in arrays entirely
+byte* checkButtons() {
+  static byte previousButtonState[] = {0, 0, 0};
+  byte currentButtonState[] = {0, 0, 0, 0};    // L, C, R, (changed?)
 
   for(byte i = 0; i < 3; i++) {
     currentButtonState[i] = digitalRead(buttons[i]);
@@ -224,24 +221,37 @@ byte* checkButtons(byte previousButtonState[]) {
     if(currentButtonState[i] != previousButtonState[i]) {
       currentButtonState[4] = 1;
       break;
-    }
-    else if {
+    } else {
       currentButtonState[4] = 0;
     }
   }
 
+  previousButtonState[] =
   return currentButtonState;
 }
 
-float* readRainfall(float totalRainfall, byte previousState) {
+// check how long it's been since the last reading
+// calculate the rainfall rate per "hour" based on this
+float readRainfall() {
+  float rainfallRate = 0;
+  static byte previousState = 0;
+
+  static unsigned long previousDump = 0;
+  unsigned long currentMillis = millis();
+
   byte currentState = digitalRead(hall);
 
   if(currentState != previousState) {
-
+    previousDump = currentMillis;
   }
 
-  // check how long it's been since the last reading
-  // calculate the rainfall rate per "hour" based on this
+  if(currentMillis - previousDump < hourLength && previousDump != 0){
+    rainfallRate = bucketSize/(previousDump/hourLength);
+  } else {
+    rainfallRate = 0;
+  }
+  previousState = currentState;
+  return rainfallRate;
 }
 
 byte rainfallScreen() {

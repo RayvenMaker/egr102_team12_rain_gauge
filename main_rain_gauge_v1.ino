@@ -145,11 +145,10 @@ byte* profileScreen(byte buttonStates[], byte lcdChanged, byte currentProfile) {
     lcd.setCursor(0, 0);
     lcd.print("current profile");
     lcd.setCursor(0, 1);
-    // This is broken now, it's not getting the length of the full word
-    byte profileLen = sizeof(profiles[currentProfile])/sizeof(profiles[0]);
+    byte profileLen = strlen(profileNames[currentProfile]);
     lcd.print("<");
-    lcd.setCursor(((16 - profileLen)/2 + 1), 1);
-    lcd.print(profiles[currentProfile]);
+    lcd.setCursor(((16 - profileLen)/2), 1);
+    lcd.print(profileNames[currentProfile]);
     lcd.setCursor(15, 1);
     lcd.print(">");
     lcdChanged = 0;
@@ -161,18 +160,18 @@ byte* profileScreen(byte buttonStates[], byte lcdChanged, byte currentProfile) {
 
       if(buttonStates[0] == 1) {
         if(screen == 0){
-          screen = sizeof(screens)/sizeof(screens[0]);
+          screen = sizeof(screens)/sizeof(screens[0]) - 1;
         } else {
           screen--;
         }
       }
 
       if(buttonStates[1] == 1){
-        editing = !editing;
+        editing = 1;
       }
 
       if(buttonStates[2] == 1) {
-        if(screen == sizeof(screens)/sizeof(screens[0])) {
+        if(screen >= sizeof(screens)/sizeof(screens[0]) - 1) {
           screen = 0;
         } else {
           screen++;
@@ -183,18 +182,18 @@ byte* profileScreen(byte buttonStates[], byte lcdChanged, byte currentProfile) {
       // Check if the left button is pressed
       if(buttonStates[0] == 1) {
         if(currentProfile == 0) {
-          currentProfile = sizeof(profiles)/sizeof(profiles[0]);
+          currentProfile = sizeof(profileNames)/sizeof(profileNames[0]) - 1;
         } else {
           currentProfile--;
         }
       }
       // Check if the center button is pressed
       if(buttonStates[1] == 1) {
-        editing = !editing;
+        editing = 0;
       }
       // Check if the right button is pressed
       if(buttonStates[2] == 1) {
-        if(currentProfile == sizeof(profiles)/sizeof(profiles[0])) {
+        if(currentProfile >= sizeof(profileNames)/sizeof(profileNames[0]) - 1) {
           currentProfile = 0;
         } else {
           currentProfile++;

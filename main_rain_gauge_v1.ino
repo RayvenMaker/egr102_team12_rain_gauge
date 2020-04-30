@@ -20,7 +20,7 @@ LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
 float corn[] = {0, 0.5, 100, 1.5, 150, 1.0, 250, 0.5};
 float wheat[] = {0, 0.5, 100, 1.5, 150, 1.0, 250, 0.5};
 float rice[] = {0, 0.5, 100, 1.5, 150, 1.0, 250, 0.5};
-const float *profiles[] = {corn, wheat, rice};
+float *profiles[] = {corn, wheat, rice};
 const char *profileNames[] = {"corn", "wheat", "rice"};
 const char *screens[] = {"current profile", "rainfall (in/s)", "motor duty %", "irrigation(in/s)", "days since start"};
 const byte buttons[] = {l_button, c_button, r_button};
@@ -28,12 +28,10 @@ const byte buttons[] = {l_button, c_button, r_button};
 const float bucketSize = 0.01;    // Size of each bucket drop in inches of rain
 const unsigned long hourLength = 5000; // Length of an "hour" in milliseconds
 const unsigned long rainfallCheckInterval = 100; // Time between rainfall checks
+const float maxFlow = 2.0;  // Assuming that the maximum water output is 2.0in/h
 
 byte screen = 0;
-byte motorDuty = 0;
-byte maxSpeed = 100;
-
-int currentProfile = 0;
+byte currentProfile = 0;
 
 /* Program structure:
 Starting up:
@@ -55,6 +53,14 @@ Running mode:
 
 void setup() {
   // RUN THE CODES ONCE
+  pinMode(cw_motor, OUTPUT);
+  pinMode(ccw_motor, OUTPUT);
+  pinMode(valve, OUTPUT);
+  pinMode(l_button, INPUT);
+  pinMode(c_button, INPUT);
+  pinMode(r_button, INPUT);
+  pinMode(hall, INPUT);
+
   Serial.begin(9600);
   lcd.begin(16, 2);
 
@@ -89,6 +95,11 @@ void loop() {
   }
 
   float irrigationLevel = getIrrigation(currentProfile, rainfallRate, currentHour);
+
+  // Calculate motor duty
+  byte motorDuty = calcMotorDuty(irrigationLevel, rainfallRate);
+  byte motorOverride = 0;   // 0 = no override, 1 = ccw, 2 = cw
+
   // check if any buttons were pressed
   byte* currentPressed = checkButtons();
 
@@ -97,41 +108,38 @@ void loop() {
 
   // Display management block
   switch(screen) {
-    case 0:
+    case 0: {
       // Shows current profile
       byte* profileState = profileScreen(currentPressed, lcdRefresh, currentProfile);
       screen = profileState[0];
       lcdRefresh = profileState[1];
       currentProfile = profileState[2];
-      break;
-    case 1:
+      }break;
+    case 1: {
       // Shows current rainfall
       screen = rainfallScreen(currentPressed, lcdRefresh, rainfallRate);
-      break;
-    case 2:
+      }break;
+    case 2: {
       // Shows current motor speed
       byte* motorState = motorScreen(currentPressed, lcdRefresh, motorDuty);
       screen = motorState[0];
       lcdRefresh = motorState[1];
-      motorDuty = motorState[2];
-      break;
-    case 3:
+      motorOverride = motorState[2];
+      }break;
+    case 3: {
       // Shows current irrigation level
-      byte* irrigationState = irrigationScreen(currentPressed, lcdRefresh, currentIrrigation);
+      byte* irrigationState = irrigationScreen(currentPressed, lcdRefresh, currentProfile, irrigationLevel, currentHour);
       screen = irrigationState[0];
       lcdRefresh = irrigationState[1];
-      break;
-    case 4:
+      }break;
+    case 4: {
       // Shows current day in program
       screen = dateScreen(currentPressed, lcdRefresh, currentHour);
-      break;
+      }break;
   }
 
-
-  // Calculate irrigation levels
-  motorDuty = calcMotorDuty(irrigationLevel, rainfallRate);
   // Lastly, move the motor
-  runMotor(motorDuty);
+  runMotor(motorDuty, motorOverride);
 
 }
 
@@ -233,6 +241,7 @@ byte* profileScreen(byte buttonStates[], byte lcdChanged, byte currentProfile) {
 byte* motorScreen(byte buttonStates[], byte lcdChanged, byte currentSpeed) {
   static byte editing = 0;
   byte screen = 2;          // Current screen
+  static byte motorOverride = 0;
 
   // Add a blinking cursor when editing
   int blinkDelay = 500;
@@ -247,7 +256,14 @@ byte* motorScreen(byte buttonStates[], byte lcdChanged, byte currentSpeed) {
     cursorState = 0;
   }
 
-  lcd.setCursor(6, 1);
+  if(motorOverride == 1){
+    lcd.setCursor(0, 1);
+  } else if(motorOverride == 2){
+    lcd.setCursor(15, 1);
+  } else {
+    lcd.setCursor(8, 1);
+  }
+
   if(cursorState == 1) {
     lcd.cursor();
   } else {
@@ -255,7 +271,7 @@ byte* motorScreen(byte buttonStates[], byte lcdChanged, byte currentSpeed) {
   }
 
   // Display all necessary text
-  if(lcdChanged == 1) {
+  if(lcdChanged == 1 && editing == 0) {
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("pivot duty cycle");
@@ -267,10 +283,20 @@ byte* motorScreen(byte buttonStates[], byte lcdChanged, byte currentSpeed) {
     lcd.setCursor(15, 1);
     lcd.print(">");
     lcdChanged = 0;
+  } else if(lcdChanged == 1 && editing == 1){
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("manual move");
+    lcd.setCursor(0, 1);
+    lcd.print("< ccw");
+    lcd.setCursor(12, 1);
+    lcd.print("cw >");
+    lcdChanged = 0;
   }
 
   if(buttonStates[3] == 1) { // Checks if a button state has been changed
     lcdChanged = 1;
+    motorOverride = 0;
     if(editing == 0) {
 
       if(buttonStates[0] == 1) {
@@ -296,11 +322,7 @@ byte* motorScreen(byte buttonStates[], byte lcdChanged, byte currentSpeed) {
     } else if(editing == 1) {
       // Check if the left button is pressed
       if(buttonStates[0] == 1) {
-        if(currentSpeed == 0) {
-          currentSpeed = 0;
-        } else {
-          currentSpeed--;
-        }
+        motorOverride = 1;
       }
       // Check if the center button is pressed
       if(buttonStates[1] == 1) {
@@ -308,11 +330,7 @@ byte* motorScreen(byte buttonStates[], byte lcdChanged, byte currentSpeed) {
       }
       // Check if the right button is pressed
       if(buttonStates[2] == 1) {
-        if(currentSpeed >= maxSpeed) {
-          currentSpeed = maxSpeed;
-        } else {
-          currentSpeed++;
-        }
+        motorOverride = 2;
       }
 
     }
@@ -320,12 +338,12 @@ byte* motorScreen(byte buttonStates[], byte lcdChanged, byte currentSpeed) {
     lcdChanged = 0;
   }
 
-  byte outputValues[] = {screen, lcdChanged, currentSpeed};
+  byte outputValues[] = {screen, lcdChanged, motorOverride};
   return outputValues;
 }
 
 // Displays the current amount of water being delivered to the crop per hour
-byte* irrigationScreen(byte buttonStates[], byte lcdChanged, byte currentProfile, float currentIrrigation) {
+byte* irrigationScreen(byte buttonStates[], byte lcdChanged, byte currentProfile, float irrigationLevel, unsigned int currentHour) {
   static byte editing = 0;
   byte screen = 3;          // Current screen
 
@@ -342,7 +360,7 @@ byte* irrigationScreen(byte buttonStates[], byte lcdChanged, byte currentProfile
     cursorState = 0;
   }
 
-  lcd.setCursor(6, 1);
+  lcd.setCursor(4, 1);
   if(cursorState == 1) {
     lcd.cursor();
   } else {
@@ -365,10 +383,13 @@ byte* irrigationScreen(byte buttonStates[], byte lcdChanged, byte currentProfile
     lcdChanged = 0;
   }
 
-  if(buttonStates[3] == 1) { // Checks if a button state has been changed
+  // Checks if a button state has been changed
+  if(buttonStates[3] == 1) {
     lcdChanged = 1;
+    float currentIrrigation = getIrrigation(currentProfile, currentHour);
+    // If not in editing mode, change the screen
     if(editing == 0) {
-
+      // Check if left button is pressed
       if(buttonStates[0] == 1) {
         if(screen == 0){
           screen = sizeof(screens)/sizeof(screens[0]) - 1;
@@ -376,11 +397,11 @@ byte* irrigationScreen(byte buttonStates[], byte lcdChanged, byte currentProfile
           screen--;
         }
       }
-
+      // Check if center button is pressed
       if(buttonStates[1] == 1){
         editing = 1;
       }
-
+      // Check if right button is pressed
       if(buttonStates[2] == 1) {
         if(screen >= sizeof(screens)/sizeof(screens[0]) - 1) {
           screen = 0;
@@ -389,13 +410,12 @@ byte* irrigationScreen(byte buttonStates[], byte lcdChanged, byte currentProfile
         }
       }
 
+    // If in editing mode, change the irrigation level
     } else if(editing == 1) {
       // Check if the left button is pressed
       if(buttonStates[0] == 1) {
-        if(currentProfile == 0) {
-          currentProfile = sizeof(profileNames)/sizeof(profileNames[0]) - 1;
-        } else {
-          currentProfile--;
+        if(currentIrrigation > 0.05) {
+          currentIrrigation -= 0.05;
         }
       }
       // Check if the center button is pressed
@@ -404,14 +424,11 @@ byte* irrigationScreen(byte buttonStates[], byte lcdChanged, byte currentProfile
       }
       // Check if the right button is pressed
       if(buttonStates[2] == 1) {
-        if(currentProfile >= sizeof(profileNames)/sizeof(profileNames[0]) - 1) {
-          currentProfile = 0;
-        } else {
-          currentProfile++;
-        }
+        currentIrrigation += 0.05;
       }
 
     }
+    modifyIrrigation(currentProfile, currentHour, currentIrrigation);
   } else {
     lcdChanged = 0;
   }
@@ -421,104 +438,109 @@ byte* irrigationScreen(byte buttonStates[], byte lcdChanged, byte currentProfile
 }
 
 // Displays the current amount of rainfall in inches per hour
-byte rainfallScreen(byte buttonStates[], byte lcdChanged, byte currentRainfall) {
-  static byte editing = 0;
+byte rainfallScreen(byte buttonStates[], byte currentRainfall) {
   byte screen = 1;          // Current screen
 
-  // Add a blinking cursor when editing
-  int blinkDelay = 500;
-  static bool cursorState = 0;
-  unsigned long currentMillis = millis();
-  static unsigned long previousBlink = 0;
-
-  if(editing == 1 && previousBlink - currentMillis >= blinkDelay){
-    previousBlink = currentMillis;
-    cursorState = !cursorState;
-  } else if(editing == 0) {
-    cursorState = 0;
-  }
-
-  byte profileLen = strlen(profileNames[currentProfile]);
-  lcd.setCursor(((16 - profileLen)/2), 1);
-  if(cursorState == 1) {
-    lcd.cursor();
-  } else {
-    lcd.noCursor();
-  }
-
   // Display all necessary text
-  if(lcdChanged == 1) {
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("current profile");
-    lcd.setCursor(0, 1);
-    lcd.print("<");
-    lcd.setCursor(((16 - profileLen)/2), 1);
-    lcd.print(profileNames[currentProfile]);
-    lcd.setCursor(15, 1);
-    lcd.print(">");
-    lcdChanged = 0;
-  }
+  lcd.setCursor(0, 0);
+  lcd.print("rainfall (in/h)");
+  lcd.setCursor(0, 1);
+  lcd.print("<");
+  lcd.setCursor(6, 1);
+  lcd.print(currentRainfall);
+  lcd.setCursor(15, 1);
+  lcd.print(">");
 
   if(buttonStates[3] == 1) { // Checks if a button state has been changed
-    lcdChanged = 1;
-    if(editing == 0) {
 
-      if(buttonStates[0] == 1) {
-        if(screen == 0){
-          screen = sizeof(screens)/sizeof(screens[0]) - 1;
-        } else {
-          screen--;
-        }
+    if(buttonStates[0] == 1) {
+      if(screen == 0){
+        screen = sizeof(screens)/sizeof(screens[0]) - 1;
+      } else {
+        screen--;
       }
-
-      if(buttonStates[1] == 1){
-        editing = 1;
-      }
-
-      if(buttonStates[2] == 1) {
-        if(screen >= sizeof(screens)/sizeof(screens[0]) - 1) {
-          screen = 0;
-        } else {
-          screen++;
-        }
-      }
-
-    } else if(editing == 1) {
-      // Check if the left button is pressed
-      if(buttonStates[0] == 1) {
-        if(currentProfile == 0) {
-          currentProfile = sizeof(profileNames)/sizeof(profileNames[0]) - 1;
-        } else {
-          currentProfile--;
-        }
-      }
-      // Check if the center button is pressed
-      if(buttonStates[1] == 1) {
-        editing = 0;
-      }
-      // Check if the right button is pressed
-      if(buttonStates[2] == 1) {
-        if(currentProfile >= sizeof(profileNames)/sizeof(profileNames[0]) - 1) {
-          currentProfile = 0;
-        } else {
-          currentProfile++;
-        }
-      }
-
     }
-  } else {
-    lcdChanged = 0;
+
+    if(buttonStates[1] == 1){
+      editing = 1;
+    }
+
+    if(buttonStates[2] == 1) {
+      if(screen >= sizeof(screens)/sizeof(screens[0]) - 1) {
+        screen = 0;
+      } else {
+        screen++;
+      }
+    }
+
   }
 
-  byte outputValues[] = {screen, lcdChanged, currentProfile};
-  return outputValues;
+  return screen;
 }
 
 // Displays the current day since the program was started
-byte dateScreen(byte buttonStates[], byte lcdChanged, byte currentHour){
-  // byte screen = 5;
-  return 0;
+byte dateScreen(byte buttonStates[], unsigned int currentHour) {
+  byte screen = 5;          // Current screen
+
+  // Switch between showing the current date and current hour
+  unsigned int switchDelay = 3000;
+  static bool switchState = 0;
+  unsigned long currentMillis = millis();
+  static unsigned long previousSwitch = 0;
+
+  if(previousSwitch - currentMillis >= blinkDelay){
+    previousSwitch = currentMillis;
+    switchState = !switchState;
+    lcd.clear();
+  }
+
+  // Display all necessary text
+  if(switchState == 0){
+
+    lcd.setCursor(0, 0);
+    lcd.print("days since start");
+    lcd.setCursor(0, 1);
+    lcd.print("<");
+    lcd.setCursor(15, 1);
+    lcd.print(">");
+    lcd.setCursor(6, 1);
+    lcd.print(currentHour/24);
+  } else {
+    lcd.setCursor(0, 0);
+    lcd.print("current hour");
+    lcd.setCursor(0, 1);
+    lcd.print("<");
+    lcd.setCursor(15, 1);
+    lcd.print(">");
+    lcd.setCursor(6, 1);
+    lcd.print(currentHour);
+  }
+
+  if(buttonStates[3] == 1) { // Checks if a button state has been changed
+
+    if(buttonStates[0] == 1) {
+      if(screen == 0){
+        screen = sizeof(screens)/sizeof(screens[0]) - 1;
+      } else {
+        screen--;
+      }
+    }
+
+    if(buttonStates[1] == 1){
+      editing = 1;
+    }
+
+    if(buttonStates[2] == 1) {
+      if(screen >= sizeof(screens)/sizeof(screens[0]) - 1) {
+        screen = 0;
+      } else {
+        screen++;
+      }
+    }
+
+  }
+
+  return screen;
 }
 
 // Passes out array with current button states and whether they have recently changed
@@ -605,7 +627,7 @@ float getIrrigation(byte currentProfile, byte currentHour) {
   unsigned int currentDate = currentHour/24;
 
   bool sectionFound = 0;
-  float stopDate = profiles[currentProfile][sizeof(profiles[currentProfile])/sizeof(profiles[currentProfile][0]) - 1];
+  float stopDate = profiles[currentProfile][sizeof(profiles[currentProfile])/sizeof(profiles[currentProfile][0]) - 2];
   float irrigationLevel = 0;
 
   // If the current date is past the end of the profile, end the program
@@ -627,14 +649,87 @@ float getIrrigation(byte currentProfile, byte currentHour) {
   return irrigationLevel;
 }
 
-// Calculate the motor duty cycle given the rainfall and
+// Finds the current irrigation level and replaces it
+void modifyIrrigation(byte currentProfile, byte currentHour, float irrigationLevel) {
+  unsigned int currentDate = currentHour/24;
+
+  bool sectionFound = 0;
+  float stopDate = profiles[currentProfile][sizeof(profiles[currentProfile])/sizeof(profiles[currentProfile][0]) - 2];
+
+  // If the current date is past the end of the profile, end the program
+  if(currentDate >= stopDate){
+    return;
+  } else {
+    // Otherwise, search for the irrigation level for the current date range
+    while(!sectionFound) {
+      if(currentDate > profiles[currentProfile][2*i]) {
+        sectionFound = 0;
+        i++;
+      } else {
+        profiles[currentProfile][2*i-1] = irrigationLevel;
+        sectionFound = 1;
+      }
+    }
+  }
+
+}
+
+// Calculate the motor duty cycle given the rainfall and target irrigation
 byte calcMotorDuty(float irrigationLevel, float rainfallRate) {
+  float targetIrrigation = irrigationLevel - rainfallRate;
+  byte motorDuty = 0;
+
+  // Calculate the motor duty for the target irrigation
+  if(targetIrrigation <= maxFlow && targetIrrigation > 0){
+    motorDuty = (targetIrrigation - 0) * (1 - 100) / (maxFlow - 0) + 100;
+  }
 
   return motorDuty; // Motor duty is a number between 0 and 100
 }
 
 // Uses the given motor duty to run the motor, and decides whether to open the valve
-void runMotor(byte motorDuty) {
-  // If the motor duty is 100%, then just shut off the motor and valve
+void runMotor(byte motorDuty, byte motorOverride) {
+  // If the motor duty is 0%, then just shut off the motor and valve
   // Otherwise, run the motor and turn on the valve.
+  unsigned long currentMillis = millis();
+  static unsigned long previousMillis = 0;
+  static bool moving = 0;
+
+  if(motorDuty > 0){
+    unsigned long moveInterval = map(motorDuty, 0, 100, 0, hourLength);
+    unsigned long stopInterval = hourLength - moveInterval;
+
+    if(moving == 1){
+      if(currentMillis - previousMillis >= moveInterval){
+        previousMillis = currentMillis;
+        digitalWrite(cw_motor, LOW);
+        digitalWrite(ccw_motor, LOW);
+        moving = 0;
+      }
+    } else {
+      if(currentMillis - previousMillis >= stopInterval){
+        previousMillis = currentMillis;
+        digitalWrite(cw_motor, HIGH);
+        digitalWrite(ccw_motor, LOW);
+        moving = 1;
+      }
+    }
+    digitalWrite(valve, HIGH);
+
+  } else {
+    digitalWrite(cw_motor, LOW);
+    digitalWrite(ccw_motor, LOW);
+    digitalWrite(valve, LOW);
+  }
+
+  if(motorOverride == 1){
+    digitalWrite(cw_motor, HIGH);
+    digitalWrite(ccw_motor, LOW);
+    digitalWrite(valve, HIGH);
+  } else if(motorOverride == 2){
+    digitalWrite(cw_motor, LOW);
+    digitalWrite(ccw_motor, HIGH);
+    digitalWrite(valve, HIGH);
+  }
+
 }

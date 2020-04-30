@@ -18,9 +18,10 @@ LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
 // The second number in a pair is the rainfall in inches per day that the crop
 // will recieve until the next change
 float corn[] = {0, 0.5, 100, 1.5, 150, 1.0, 250, 0.5};
-float wheat[] = {0, 0.5, 100, 1.5, 150, 1.0, 250, 0.5};
-float rice[] = {0, 0.5, 100, 1.5, 150, 1.0, 250, 0.5};
+float wheat[] = {0, 0.6, 110, 1.4, 140, 1.1, 240, 0.4};
+float rice[] = {0, 0.4, 90, 1.6, 150, 0.9, 260, 0.6};
 float *profiles[] = {corn, wheat, rice};
+byte profileLen[] = {8, 8, 8};
 const char *profileNames[] = {"corn", "wheat", "rice"};
 const char *screens[] = {"current profile", "rainfall (in/s)", "motor duty %", "irrigation(in/s)", "days since start"};
 const byte buttons[] = {l_button, c_button, r_button};
@@ -28,6 +29,7 @@ const byte buttons[] = {l_button, c_button, r_button};
 const float bucketSize = 0.01;    // Size of each bucket drop in inches of rain
 const unsigned long hourLength = 5000; // Length of an "hour" in milliseconds
 const unsigned long rainfallCheckInterval = 100; // Time between rainfall checks
+const unsigned long summaryInterval = 10000; // Time between serial print summaries
 const float maxFlow = 2.0;  // Assuming that the maximum water output is 2.0in/h
 
 byte screen = 0;
@@ -81,6 +83,7 @@ void loop() {
   static unsigned long previousMotorM = 0;
   static unsigned long previousHour = 0;
   static unsigned long previousRainCheck = 0;
+  static unsigned long previousSummary = 0;
   static unsigned int currentHour = 0;
   static float rainfallRate = 0;
 
@@ -90,10 +93,7 @@ void loop() {
     currentHour++;
   }
 
-  // Read rain gauge every checking interval
-  if(currentMillis - previousRainCheck >= rainfallCheckInterval){
-    rainfallRate = readRainfall();
-  }
+  rainfallRate = readRainfall();
 
   float irrigationLevel = getIrrigation(currentProfile, currentHour);
 
@@ -107,8 +107,6 @@ void loop() {
   // Set up the LCD change tracker
   static byte lcdRefresh = 1;
 
-  Serial.println(screen);
-
   // Display management block
   switch(screen) {
     case 0: {
@@ -117,12 +115,12 @@ void loop() {
       screen = profileState[0];
       lcdRefresh = profileState[1];
       currentProfile = profileState[2];
-      Serial.print("Profile");
+      //Serial.print("Profile");
       }break;
     case 1: {
       // Shows current rainfall
       screen = rainfallScreen(currentPressed, rainfallRate);
-      Serial.print("Rainfall");
+      //Serial.print("Rainfall");
       }break;
     case 2: {
       // Shows current motor speed
@@ -130,30 +128,42 @@ void loop() {
       screen = motorState[0];
       lcdRefresh = motorState[1];
       motorOverride = motorState[2];
-      Serial.print("Motor");
+      //Serial.print("Motor");
       }break;
     case 3: {
       // Shows current irrigation level
-      byte* irrigationState = irrigationScreen(currentPressed, lcdRefresh, currentProfile, irrigationLevel, currentHour);
-      screen = irrigationState[0];
-      lcdRefresh = irrigationState[1];
-      Serial.print("Irrigation");
+      screen = irrigationScreen(currentPressed, irrigationLevel);
+      //Serial.print("Irrigation");
       }break;
     case 4: {
       // Shows current day in program
       screen = dateScreen(currentPressed, currentHour);
-      Serial.print("Date");
+      //Serial.print("Date");
       }break;
     default: {
       screen = 0;
-      Serial.print("exeception");
+      //Serial.print("exeception");
       }break;
+  }
+
+  // Print out a summary to the serial monitor
+  if(currentMillis - previousSummary >= summaryInterval){
+    Serial.print("hour = ");
+    Serial.print(currentHour);
+    Serial.print(", rain = ");
+    Serial.print(rainfallRate);
+    Serial.print("(in/h), motor = ");
+    Serial.print(motorDuty);
+    Serial.print("%, water = ");
+    Serial.print(irrigationLevel);
+    Serial.println("(in/h)");
+    previousSummary = currentMillis;
   }
 
   // Lastly, move the motor
   runMotor(motorDuty, motorOverride);
 
-  delay(50);
+  delay(25);
 }
 
 // Manages the LCD display and the customizable functions
@@ -256,6 +266,7 @@ byte* motorScreen(byte buttonStates[], byte lcdChanged, byte currentSpeed) {
   static byte motorOverride = 0;
 
   int refreshInterval = 100;
+  unsigned long currentMillis = millis();
   static bool lcdRefresh = 0;
   static unsigned long previousRefresh = 0;
   if(currentMillis - previousRefresh >= refreshInterval) {
@@ -265,7 +276,6 @@ byte* motorScreen(byte buttonStates[], byte lcdChanged, byte currentSpeed) {
   // Add a blinking cursor when editing
   int blinkDelay = 500;
   static bool cursorState = 0;
-  unsigned long currentMillis = millis();
   static unsigned long previousBlink = 0;
 
   if(editing == 1 && previousBlink - currentMillis >= blinkDelay){
@@ -354,39 +364,19 @@ byte* motorScreen(byte buttonStates[], byte lcdChanged, byte currentSpeed) {
 }
 
 // Displays the current amount of water being delivered to the crop per hour
-byte* irrigationScreen(byte buttonStates[], byte lcdChanged, byte currentProfile, float irrigationLevel, unsigned int currentHour) {
-  static byte editing = 0;
+byte irrigationScreen(byte buttonStates[], float irrigationLevel) {
   byte screen = 3;          // Current screen
 
   int refreshInterval = 100;
+  unsigned long currentMillis = millis();
   static bool lcdRefresh = 0;
   static unsigned long previousRefresh = 0;
   if(currentMillis - previousRefresh >= refreshInterval) {
     lcdRefresh = !lcdRefresh;
   }
 
-  // Add a blinking cursor when editing
-  int blinkDelay = 500;
-  static bool cursorState = 0;
-  unsigned long currentMillis = millis();
-  static unsigned long previousBlink = 0;
-
-  if(editing == 1 && previousBlink - currentMillis >= blinkDelay){
-    previousBlink = currentMillis;
-    cursorState = !cursorState;
-  } else if(editing == 0) {
-    cursorState = 0;
-  }
-
-  lcd.setCursor(4, 1);
-  if(cursorState == 1) {
-    lcd.cursor();
-  } else {
-    lcd.noCursor();
-  }
-
   // Display all necessary text
-  if(lcdChanged == 1 || lcdRefresh == 1) {
+  if(lcdRefresh == 1) {
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("water delivered");
@@ -398,61 +388,32 @@ byte* irrigationScreen(byte buttonStates[], byte lcdChanged, byte currentProfile
     lcd.print("in/h");
     lcd.setCursor(15, 1);
     lcd.print(">");
-    lcdChanged = 0;
   }
 
   // Checks if a button state has been changed
   if(buttonStates[3] == 1) {
-    lcdChanged = 1;
-    float currentIrrigation = getIrrigation(currentProfile, currentHour);
-    // If not in editing mode, change the screen
-    if(editing == 0) {
-      // Check if left button is pressed
-      if(buttonStates[0] == 1) {
-        screen = 2;
-      }
-      // Check if center button is pressed
-      if(buttonStates[1] == 1){
-        editing = 1;
-      }
-      // Check if right button is pressed
-      if(buttonStates[2] == 1) {
-        screen = 4;
-      }
-
-    // If in editing mode, change the irrigation level
-    } else if(editing == 1) {
-      // Check if the left button is pressed
-      if(buttonStates[0] == 1) {
-        if(currentIrrigation > 0.05) {
-          currentIrrigation -= 0.05;
-        }
-      }
-      // Check if the center button is pressed
-      if(buttonStates[1] == 1) {
-        editing = 0;
-      }
-      // Check if the right button is pressed
-      if(buttonStates[2] == 1) {
-        currentIrrigation += 0.05;
-      }
-
+    // Check if left button is pressed
+    if(buttonStates[0] == 1) {
+      screen = 2;
     }
-    modifyIrrigation(currentProfile, currentHour, currentIrrigation);
+    // Check if right button is pressed
+    if(buttonStates[2] == 1) {
+      screen = 4;
+    }
   } else {
-    lcdChanged = 0;
+    screen = 3;
   }
 
-  byte outputValues[] = {screen, lcdChanged};
-  return outputValues;
+  return screen;
 }
 
 // Displays the current amount of rainfall in inches per hour
-byte rainfallScreen(byte buttonStates[], byte currentRainfall) {
+byte rainfallScreen(byte buttonStates[], float currentRainfall) {
   byte screen = 1;          // Current screen
 
   int refreshInterval = 100;
   static bool lcdRefresh = 0;
+  unsigned long currentMillis = millis();
   static unsigned long previousRefresh = 0;
   if(currentMillis - previousRefresh >= refreshInterval) {
     lcdRefresh = !lcdRefresh;
@@ -481,6 +442,8 @@ byte rainfallScreen(byte buttonStates[], byte currentRainfall) {
       screen = 2;
     }
 
+  } else {
+    screen = 1;
   }
 
   return screen;
@@ -496,6 +459,13 @@ byte dateScreen(byte buttonStates[], unsigned int currentHour) {
   unsigned long currentMillis = millis();
   static unsigned long previousSwitch = 0;
 
+  int refreshInterval = 100;
+  static bool lcdRefresh = 0;
+  static unsigned long previousRefresh = 0;
+  if(currentMillis - previousRefresh >= refreshInterval) {
+    lcdRefresh = !lcdRefresh;
+  }
+
   if(currentMillis - previousSwitch >= switchDelay){
     previousSwitch = currentMillis;
     switchState = !switchState;
@@ -503,26 +473,28 @@ byte dateScreen(byte buttonStates[], unsigned int currentHour) {
   }
 
   // Display all necessary text
-  if(switchState == 0){
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("days since start");
-    lcd.setCursor(0, 1);
-    lcd.print("<");
-    lcd.setCursor(15, 1);
-    lcd.print(">");
-    lcd.setCursor(6, 1);
-    lcd.print(currentHour/24);
-  } else {
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("current hour");
-    lcd.setCursor(0, 1);
-    lcd.print("<");
-    lcd.setCursor(15, 1);
-    lcd.print(">");
-    lcd.setCursor(6, 1);
-    lcd.print(currentHour);
+  if(lcdRefresh == 1){
+    if(switchState == 0){
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("days since start");
+      lcd.setCursor(0, 1);
+      lcd.print("<");
+      lcd.setCursor(15, 1);
+      lcd.print(">");
+      lcd.setCursor(6, 1);
+      lcd.print(currentHour/24);
+    } else {
+      lcd.clear();
+      lcd.setCursor(0, 0);
+      lcd.print("current hour");
+      lcd.setCursor(0, 1);
+      lcd.print("<");
+      lcd.setCursor(15, 1);
+      lcd.print(">");
+      lcd.setCursor(6, 1);
+      lcd.print(currentHour);
+    }
   }
 
   if(buttonStates[3] == 1) { // Checks if a button state has been changed
@@ -620,11 +592,11 @@ float rainfallAverage(float M) {
 
 
 // Finds the current irrigation level based on the profile selected
-float getIrrigation(byte currentProfile, byte currentHour) {
+float getIrrigation(byte currentProfile, unsigned int currentHour) {
   unsigned int currentDate = currentHour/24;
 
   bool sectionFound = 0;
-  float stopDate = profiles[currentProfile][sizeof(profiles[currentProfile])/sizeof(profiles[currentProfile][0]) - 2];
+  float stopDate = profiles[currentProfile][profileLen[currentProfile] - 2];
   float irrigationLevel = 0;
 
   // If the current date is past the end of the profile, end the program
@@ -634,7 +606,7 @@ float getIrrigation(byte currentProfile, byte currentHour) {
     // Otherwise, search for the irrigation level for the current date range
     byte i = 0;
     while(!sectionFound) {
-      if(currentDate > profiles[currentProfile][2*i]) {
+      if(currentDate >= profiles[currentProfile][2*i]) {
         sectionFound = 0;
         i++;
       } else {
@@ -647,31 +619,6 @@ float getIrrigation(byte currentProfile, byte currentHour) {
   return irrigationLevel;
 }
 
-// Finds the current irrigation level and replaces it
-void modifyIrrigation(byte currentProfile, byte currentHour, float irrigationLevel) {
-  unsigned int currentDate = currentHour/24;
-
-  bool sectionFound = 0;
-  float stopDate = profiles[currentProfile][sizeof(profiles[currentProfile])/sizeof(profiles[currentProfile][0]) - 2];
-
-  // If the current date is past the end of the profile, end the program
-  if(currentDate >= stopDate){
-    return;
-  } else {
-    // Otherwise, search for the irrigation level for the current date range
-    byte i = 0;
-    while(!sectionFound) {
-      if(currentDate > profiles[currentProfile][2*i]) {
-        sectionFound = 0;
-        i++;
-      } else {
-        profiles[currentProfile][2*i-1] = irrigationLevel;
-        sectionFound = 1;
-      }
-    }
-  }
-
-}
 
 // Calculate the motor duty cycle given the rainfall and target irrigation
 byte calcMotorDuty(float irrigationLevel, float rainfallRate) {

@@ -4,9 +4,9 @@
 
 #define cw_motor 8
 #define ccw_motor 9
-#define l_button 10
+#define l_button 12
 #define c_button 11
-#define r_button 12
+#define r_button 10
 #define valve 13
 #define hall A0
 
@@ -82,6 +82,7 @@ void loop() {
   static unsigned long previousHour = 0;
   static unsigned long previousRainCheck = 0;
   static unsigned int currentHour = 0;
+  static float rainfallRate = 0;
 
   // Check if an hour has passed
   if(currentMillis - previousHour >= hourLength) {
@@ -91,10 +92,10 @@ void loop() {
 
   // Read rain gauge every checking interval
   if(currentMillis - previousRainCheck >= rainfallCheckInterval){
-    float rainfallRate = readRainfall();
+    rainfallRate = readRainfall();
   }
 
-  float irrigationLevel = getIrrigation(currentProfile, rainfallRate, currentHour);
+  float irrigationLevel = getIrrigation(currentProfile, currentHour);
 
   // Calculate motor duty
   byte motorDuty = calcMotorDuty(irrigationLevel, rainfallRate);
@@ -106,6 +107,8 @@ void loop() {
   // Set up the LCD change tracker
   static byte lcdRefresh = 1;
 
+  Serial.println(screen);
+
   // Display management block
   switch(screen) {
     case 0: {
@@ -114,10 +117,12 @@ void loop() {
       screen = profileState[0];
       lcdRefresh = profileState[1];
       currentProfile = profileState[2];
+      Serial.print("Profile");
       }break;
     case 1: {
       // Shows current rainfall
-      screen = rainfallScreen(currentPressed, lcdRefresh, rainfallRate);
+      screen = rainfallScreen(currentPressed, rainfallRate);
+      Serial.print("Rainfall");
       }break;
     case 2: {
       // Shows current motor speed
@@ -125,40 +130,55 @@ void loop() {
       screen = motorState[0];
       lcdRefresh = motorState[1];
       motorOverride = motorState[2];
+      Serial.print("Motor");
       }break;
     case 3: {
       // Shows current irrigation level
       byte* irrigationState = irrigationScreen(currentPressed, lcdRefresh, currentProfile, irrigationLevel, currentHour);
       screen = irrigationState[0];
       lcdRefresh = irrigationState[1];
+      Serial.print("Irrigation");
       }break;
     case 4: {
       // Shows current day in program
-      screen = dateScreen(currentPressed, lcdRefresh, currentHour);
+      screen = dateScreen(currentPressed, currentHour);
+      Serial.print("Date");
+      }break;
+    default: {
+      screen = 0;
+      Serial.print("exeception");
       }break;
   }
 
   // Lastly, move the motor
   runMotor(motorDuty, motorOverride);
 
+  delay(50);
 }
 
 // Manages the LCD display and the customizable functions
 byte* profileScreen(byte buttonStates[], byte lcdChanged, byte currentProfile) {
   static byte editing = 0;
-  byte screen = 0;          // Current screen
+  static byte screen = 0;          // Current screen
 
   // Add a blinking cursor when editing
-  int blinkDelay = 500;
+  int blinkDelay = 1000;
   static bool cursorState = 0;
   unsigned long currentMillis = millis();
   static unsigned long previousBlink = 0;
 
-  if(editing == 1 && previousBlink - currentMillis >= blinkDelay){
+  if(editing == 1 && currentMillis - previousBlink >= blinkDelay){
     previousBlink = currentMillis;
     cursorState = !cursorState;
   } else if(editing == 0) {
     cursorState = 0;
+  }
+
+  int refreshInterval = 100;
+  static bool lcdRefresh = 0;
+  static unsigned long previousRefresh = 0;
+  if(currentMillis - previousRefresh >= refreshInterval) {
+    lcdRefresh = !lcdRefresh;
   }
 
   byte profileLen = strlen(profileNames[currentProfile]);
@@ -170,7 +190,7 @@ byte* profileScreen(byte buttonStates[], byte lcdChanged, byte currentProfile) {
   }
 
   // Display all necessary text
-  if(lcdChanged == 1) {
+  if(lcdChanged == 1 || lcdRefresh == 1) {
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("current profile");
@@ -188,11 +208,7 @@ byte* profileScreen(byte buttonStates[], byte lcdChanged, byte currentProfile) {
     if(editing == 0) {
 
       if(buttonStates[0] == 1) {
-        if(screen == 0){
-          screen = sizeof(screens)/sizeof(screens[0]) - 1;
-        } else {
-          screen--;
-        }
+        screen = 4;
       }
 
       if(buttonStates[1] == 1){
@@ -200,11 +216,7 @@ byte* profileScreen(byte buttonStates[], byte lcdChanged, byte currentProfile) {
       }
 
       if(buttonStates[2] == 1) {
-        if(screen >= sizeof(screens)/sizeof(screens[0]) - 1) {
-          screen = 0;
-        } else {
-          screen++;
-        }
+        screen = 1;
       }
 
     } else if(editing == 1) {
@@ -243,6 +255,13 @@ byte* motorScreen(byte buttonStates[], byte lcdChanged, byte currentSpeed) {
   byte screen = 2;          // Current screen
   static byte motorOverride = 0;
 
+  int refreshInterval = 100;
+  static bool lcdRefresh = 0;
+  static unsigned long previousRefresh = 0;
+  if(currentMillis - previousRefresh >= refreshInterval) {
+    lcdRefresh = !lcdRefresh;
+  }
+
   // Add a blinking cursor when editing
   int blinkDelay = 500;
   static bool cursorState = 0;
@@ -271,7 +290,7 @@ byte* motorScreen(byte buttonStates[], byte lcdChanged, byte currentSpeed) {
   }
 
   // Display all necessary text
-  if(lcdChanged == 1 && editing == 0) {
+  if((lcdChanged == 1 || lcdRefresh == 1) && editing == 0) {
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("pivot duty cycle");
@@ -283,7 +302,7 @@ byte* motorScreen(byte buttonStates[], byte lcdChanged, byte currentSpeed) {
     lcd.setCursor(15, 1);
     lcd.print(">");
     lcdChanged = 0;
-  } else if(lcdChanged == 1 && editing == 1){
+  } else if((lcdChanged == 1 || lcdRefresh == 1) && editing == 1){
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("manual move");
@@ -300,11 +319,7 @@ byte* motorScreen(byte buttonStates[], byte lcdChanged, byte currentSpeed) {
     if(editing == 0) {
 
       if(buttonStates[0] == 1) {
-        if(screen == 0){
-          screen = sizeof(screens)/sizeof(screens[0]) - 1;
-        } else {
-          screen--;
-        }
+        screen = 1;
       }
 
       if(buttonStates[1] == 1){
@@ -312,11 +327,7 @@ byte* motorScreen(byte buttonStates[], byte lcdChanged, byte currentSpeed) {
       }
 
       if(buttonStates[2] == 1) {
-        if(screen >= sizeof(screens)/sizeof(screens[0]) - 1) {
-          screen = 0;
-        } else {
-          screen++;
-        }
+        screen = 3;
       }
 
     } else if(editing == 1) {
@@ -347,6 +358,13 @@ byte* irrigationScreen(byte buttonStates[], byte lcdChanged, byte currentProfile
   static byte editing = 0;
   byte screen = 3;          // Current screen
 
+  int refreshInterval = 100;
+  static bool lcdRefresh = 0;
+  static unsigned long previousRefresh = 0;
+  if(currentMillis - previousRefresh >= refreshInterval) {
+    lcdRefresh = !lcdRefresh;
+  }
+
   // Add a blinking cursor when editing
   int blinkDelay = 500;
   static bool cursorState = 0;
@@ -368,7 +386,7 @@ byte* irrigationScreen(byte buttonStates[], byte lcdChanged, byte currentProfile
   }
 
   // Display all necessary text
-  if(lcdChanged == 1) {
+  if(lcdChanged == 1 || lcdRefresh == 1) {
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("water delivered");
@@ -391,11 +409,7 @@ byte* irrigationScreen(byte buttonStates[], byte lcdChanged, byte currentProfile
     if(editing == 0) {
       // Check if left button is pressed
       if(buttonStates[0] == 1) {
-        if(screen == 0){
-          screen = sizeof(screens)/sizeof(screens[0]) - 1;
-        } else {
-          screen--;
-        }
+        screen = 2;
       }
       // Check if center button is pressed
       if(buttonStates[1] == 1){
@@ -403,11 +417,7 @@ byte* irrigationScreen(byte buttonStates[], byte lcdChanged, byte currentProfile
       }
       // Check if right button is pressed
       if(buttonStates[2] == 1) {
-        if(screen >= sizeof(screens)/sizeof(screens[0]) - 1) {
-          screen = 0;
-        } else {
-          screen++;
-        }
+        screen = 4;
       }
 
     // If in editing mode, change the irrigation level
@@ -441,36 +451,34 @@ byte* irrigationScreen(byte buttonStates[], byte lcdChanged, byte currentProfile
 byte rainfallScreen(byte buttonStates[], byte currentRainfall) {
   byte screen = 1;          // Current screen
 
+  int refreshInterval = 100;
+  static bool lcdRefresh = 0;
+  static unsigned long previousRefresh = 0;
+  if(currentMillis - previousRefresh >= refreshInterval) {
+    lcdRefresh = !lcdRefresh;
+  }
+
   // Display all necessary text
-  lcd.setCursor(0, 0);
-  lcd.print("rainfall (in/h)");
-  lcd.setCursor(0, 1);
-  lcd.print("<");
-  lcd.setCursor(6, 1);
-  lcd.print(currentRainfall);
-  lcd.setCursor(15, 1);
-  lcd.print(">");
+  if (lcdRefresh == 1){
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("rainfall (in/h)");
+    lcd.setCursor(0, 1);
+    lcd.print("<");
+    lcd.setCursor(6, 1);
+    lcd.print(currentRainfall);
+    lcd.setCursor(15, 1);
+    lcd.print(">");
+  }
 
   if(buttonStates[3] == 1) { // Checks if a button state has been changed
 
     if(buttonStates[0] == 1) {
-      if(screen == 0){
-        screen = sizeof(screens)/sizeof(screens[0]) - 1;
-      } else {
-        screen--;
-      }
-    }
-
-    if(buttonStates[1] == 1){
-      editing = 1;
+      screen = 0;
     }
 
     if(buttonStates[2] == 1) {
-      if(screen >= sizeof(screens)/sizeof(screens[0]) - 1) {
-        screen = 0;
-      } else {
-        screen++;
-      }
+      screen = 2;
     }
 
   }
@@ -480,7 +488,7 @@ byte rainfallScreen(byte buttonStates[], byte currentRainfall) {
 
 // Displays the current day since the program was started
 byte dateScreen(byte buttonStates[], unsigned int currentHour) {
-  byte screen = 5;          // Current screen
+  byte screen = 4;          // Current screen
 
   // Switch between showing the current date and current hour
   unsigned int switchDelay = 3000;
@@ -488,7 +496,7 @@ byte dateScreen(byte buttonStates[], unsigned int currentHour) {
   unsigned long currentMillis = millis();
   static unsigned long previousSwitch = 0;
 
-  if(previousSwitch - currentMillis >= blinkDelay){
+  if(currentMillis - previousSwitch >= switchDelay){
     previousSwitch = currentMillis;
     switchState = !switchState;
     lcd.clear();
@@ -496,7 +504,7 @@ byte dateScreen(byte buttonStates[], unsigned int currentHour) {
 
   // Display all necessary text
   if(switchState == 0){
-
+    lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("days since start");
     lcd.setCursor(0, 1);
@@ -506,6 +514,7 @@ byte dateScreen(byte buttonStates[], unsigned int currentHour) {
     lcd.setCursor(6, 1);
     lcd.print(currentHour/24);
   } else {
+    lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("current hour");
     lcd.setCursor(0, 1);
@@ -519,23 +528,11 @@ byte dateScreen(byte buttonStates[], unsigned int currentHour) {
   if(buttonStates[3] == 1) { // Checks if a button state has been changed
 
     if(buttonStates[0] == 1) {
-      if(screen == 0){
-        screen = sizeof(screens)/sizeof(screens[0]) - 1;
-      } else {
-        screen--;
-      }
-    }
-
-    if(buttonStates[1] == 1){
-      editing = 1;
+      screen = 3;
     }
 
     if(buttonStates[2] == 1) {
-      if(screen >= sizeof(screens)/sizeof(screens[0]) - 1) {
-        screen = 0;
-      } else {
-        screen++;
-      }
+      screen = 0;
     }
 
   }
@@ -635,6 +632,7 @@ float getIrrigation(byte currentProfile, byte currentHour) {
     irrigationLevel = 0;
   } else {
     // Otherwise, search for the irrigation level for the current date range
+    byte i = 0;
     while(!sectionFound) {
       if(currentDate > profiles[currentProfile][2*i]) {
         sectionFound = 0;
@@ -661,6 +659,7 @@ void modifyIrrigation(byte currentProfile, byte currentHour, float irrigationLev
     return;
   } else {
     // Otherwise, search for the irrigation level for the current date range
+    byte i = 0;
     while(!sectionFound) {
       if(currentDate > profiles[currentProfile][2*i]) {
         sectionFound = 0;
